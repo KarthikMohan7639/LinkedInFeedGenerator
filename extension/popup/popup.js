@@ -1,5 +1,5 @@
 // popup/popup.js
-// Popup UI controller
+// Popup UI controller with image gallery for captured LinkedIn posts
 
 const $ = id => document.getElementById(id);
 
@@ -9,23 +9,24 @@ let isWorking = false;
 
 // ─── DOM References ───────────────────────────────────────────────────────
 
-const btnScrape    = $("btnScrape");
-const btnFollowup  = $("btnFollowup");
-const btnReplies   = $("btnReplies");
-const btnReport    = $("btnReport");
-const btnOptions   = $("btnOptions");
-const btnAuth      = $("btnAuth");
-const footerOptions= $("footerOptions");
+const btnScrape       = $("btnScrape");
+const btnFollowup     = $("btnFollowup");
+const btnReplies      = $("btnReplies");
+const btnReport       = $("btnReport");
+const btnOptions      = $("btnOptions");
+const btnAuth         = $("btnAuth");
+const btnClearGallery = $("btnClearGallery");
+const footerOptions   = $("footerOptions");
 
-const keywordInput  = $("keyword");
-const scrapeText    = $("scrapeText");
-const statusDot     = $("statusDot");
-const statusText    = $("statusText");
-const lastScrape    = $("lastScrape");
-const authBanner    = $("authBanner");
-const successBanner = $("successBanner");
-const errorBanner   = $("errorBanner");
-const footerStatus  = $("footerStatus");
+const keywordInput   = $("keyword");
+const scrapeText     = $("scrapeText");
+const statusDot      = $("statusDot");
+const statusText     = $("statusText");
+const lastScrape     = $("lastScrape");
+const authBanner     = $("authBanner");
+const successBanner  = $("successBanner");
+const errorBanner    = $("errorBanner");
+const footerStatus   = $("footerStatus");
 
 const statWithEmail    = $("statWithEmail");
 const statWithoutEmail = $("statWithoutEmail");
@@ -34,6 +35,17 @@ const statFollowups    = $("statFollowups");
 
 const linkWithEmail    = $("linkWithEmail");
 const linkWithoutEmail = $("linkWithoutEmail");
+
+const galleryGrid    = $("galleryGrid");
+const galleryCount   = $("galleryCount");
+const galleryEmpty   = $("galleryEmpty");
+
+// Modal
+const imageModal   = $("imageModal");
+const modalBackdrop = $("modalBackdrop");
+const modalClose    = $("modalClose");
+const modalImage    = $("modalImage");
+const modalInfo     = $("modalInfo");
 
 // ─── Helpers ──────────────────────────────────────────────────────────────
 
@@ -61,9 +73,9 @@ function showBanner(type, message) {
 function setWorking(working, buttonEl, originalHtml) {
   isWorking = working;
   btnScrape.disabled   = working;
-  btnFollowup.disabled = working;
-  btnReplies.disabled  = working;
-  btnReport.disabled   = working;
+  if (btnFollowup) btnFollowup.disabled = working;
+  if (btnReplies)  btnReplies.disabled  = working;
+  if (btnReport)   btnReport.disabled   = working;
 
   if (working) {
     buttonEl.innerHTML = `<span class="spinner"></span> Working...`;
@@ -83,6 +95,12 @@ function formatRelativeTime(isoString) {
   return `${Math.floor(hrs / 24)}d ago`;
 }
 
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
 async function sendMessage(type, data = {}) {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({ type, ...data }, (response) => {
@@ -95,6 +113,105 @@ async function sendMessage(type, data = {}) {
       }
     });
   });
+}
+
+// ─── Tab Switching ────────────────────────────────────────────────────────
+
+document.querySelectorAll(".popup-tab").forEach(tab => {
+  tab.addEventListener("click", () => {
+    document.querySelectorAll(".popup-tab").forEach(t => t.classList.remove("active"));
+    document.querySelectorAll(".popup-tab-content").forEach(c => c.classList.add("hidden"));
+    tab.classList.add("active");
+    $(`tab-${tab.dataset.tab}`).classList.remove("hidden");
+  });
+});
+
+// ─── Gallery ──────────────────────────────────────────────────────────────
+
+function renderGallery(gallery) {
+  // Clear existing cards (keep the empty state element)
+  const cards = galleryGrid.querySelectorAll(".gallery-card");
+  cards.forEach(c => c.remove());
+
+  if (!gallery || gallery.length === 0) {
+    galleryEmpty.classList.remove("hidden");
+    galleryCount.textContent = "No captures yet";
+    return;
+  }
+
+  galleryEmpty.classList.add("hidden");
+  galleryCount.textContent = `${gallery.length} post${gallery.length !== 1 ? "s" : ""} captured`;
+
+  gallery.forEach((item, idx) => {
+    const card = document.createElement("div");
+    card.className = "gallery-card";
+
+    const emailsHtml = item.emails && item.emails.length > 0
+      ? `<div class="gallery-contact has-data">📧 ${escapeHtml(item.emails.join(", "))}</div>`
+      : `<div class="gallery-contact">📧 No email found</div>`;
+
+    const phonesHtml = item.phones && item.phones.length > 0
+      ? `<div class="gallery-contact has-data">📱 ${escapeHtml(item.phones.join(", "))}</div>`
+      : `<div class="gallery-contact">📱 No phone found</div>`;
+
+    const timeStr = item.capturedAt ? formatRelativeTime(item.capturedAt) : "";
+
+    card.innerHTML = `
+      <img class="gallery-card-image" src="${item.imageDataUrl}" alt="Post screenshot"
+           data-idx="${idx}" loading="lazy">
+      <div class="gallery-card-body">
+        <div class="gallery-card-author">
+          👤 ${escapeHtml(item.authorName || "Unknown")}
+        </div>
+        <div class="gallery-card-contacts">
+          ${emailsHtml}
+          ${phonesHtml}
+        </div>
+        ${timeStr ? `<div class="gallery-card-time">${timeStr}</div>` : ""}
+      </div>
+    `;
+
+    // Click image to open modal
+    const imgEl = card.querySelector(".gallery-card-image");
+    imgEl.addEventListener("click", () => openModal(item));
+
+    galleryGrid.appendChild(card);
+  });
+}
+
+function openModal(item) {
+  modalImage.src = item.imageDataUrl;
+
+  const emailStr = item.emails?.length ? item.emails.join(", ") : "None";
+  const phoneStr = item.phones?.length ? item.phones.join(", ") : "None";
+
+  modalInfo.innerHTML = `
+    <div><strong>Author:</strong> ${escapeHtml(item.authorName || "Unknown")}</div>
+    <div><strong>Emails:</strong> ${escapeHtml(emailStr)}</div>
+    <div><strong>Phones:</strong> ${escapeHtml(phoneStr)}</div>
+    ${item.ocrText ? `<div style="margin-top:6px;"><strong>OCR Text:</strong> ${escapeHtml(item.ocrText.substring(0, 200))}${item.ocrText.length > 200 ? "..." : ""}</div>` : ""}
+  `;
+
+  imageModal.classList.remove("hidden");
+}
+
+function closeModal() {
+  imageModal.classList.add("hidden");
+  modalImage.src = "";
+}
+
+modalClose.addEventListener("click", closeModal);
+modalBackdrop.addEventListener("click", closeModal);
+
+async function loadGallery() {
+  try {
+    const result = await sendMessage("GET_GALLERY");
+    if (result?.gallery) {
+      renderGallery(result.gallery);
+    }
+  } catch {
+    // Gallery may not exist yet
+  }
 }
 
 // ─── Load Settings & Stats ────────────────────────────────────────────────
@@ -110,9 +227,8 @@ async function loadSettings() {
     showBanner("auth");
   }
 
-  // Build sheet links
   if (spreadsheetId) {
-    const sheetBase = `https://docs.google.com/spreadsheets/d/${spreadsheetId}`;
+    const sheetBase = `https://docs.google.com/spreadsheets/d/${encodeURIComponent(spreadsheetId)}`;
     linkWithEmail.href    = sheetBase;
     linkWithoutEmail.href = sheetBase;
   }
@@ -131,7 +247,7 @@ async function loadStats() {
       }
     }
   } catch {
-    // Non-critical – stats may not be available on first load
+    // Non-critical
   }
 }
 
@@ -146,25 +262,37 @@ btnScrape.addEventListener("click", async () => {
     return;
   }
 
-  // Save keyword to storage
   await chrome.storage.sync.set({ searchKeyword: keyword });
 
   const originalHTML = btnScrape.innerHTML;
   setWorking(true, btnScrape, originalHTML);
-  setStatus("running", "Scraping LinkedIn...");
+  setStatus("running", "Capturing LinkedIn posts...");
 
   try {
     const result = await sendMessage("TRIGGER_SCRAPE", { keyword });
-    setStatus("done", "Scrape triggered on LinkedIn tab");
-    showBanner("success", `✓ Scraper injected! Check LinkedIn tab. ${result?.message || ""}`);
+    setStatus("done", "Capture started on LinkedIn tab");
+    showBanner("success", `✓ Screenshot capture started! Check LinkedIn tab. ${result?.message || ""}`);
 
-    // Refresh stats after a short delay
-    setTimeout(loadStats, 5000);
+    // Poll for gallery updates
+    setTimeout(async () => {
+      await loadGallery();
+      await loadStats();
+    }, 8000);
   } catch (err) {
-    setStatus("error", "Scrape failed");
+    setStatus("error", "Capture failed");
     showBanner("error", `✗ ${err.message}`);
   } finally {
     setWorking(false, btnScrape, originalHTML);
+  }
+});
+
+btnClearGallery.addEventListener("click", async () => {
+  try {
+    await sendMessage("CLEAR_GALLERY");
+    renderGallery([]);
+    showBanner("success", "✓ Gallery cleared");
+  } catch (err) {
+    showBanner("error", `✗ ${err.message}`);
   }
 });
 
@@ -246,5 +374,6 @@ keywordInput.addEventListener("change", async () => {
 (async () => {
   await loadSettings();
   await loadStats();
+  await loadGallery();
   setStatus("idle", "Idle");
 })();

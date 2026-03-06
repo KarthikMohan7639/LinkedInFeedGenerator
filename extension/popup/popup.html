@@ -35,12 +35,12 @@
 
     <!-- Scrape Button -->
     <button id="btnScrape" class="btn btn-primary btn-full">
-      <span id="scrapeIcon">🔍</span>
-      <span id="scrapeText">Scrape LinkedIn Now</span>
+      <span id="scrapeIcon">�</span>
+      <span id="scrapeText">Capture LinkedIn Posts</span>
     </button>
 
     <div id="scrapeHint" class="hint">
-      Make sure LinkedIn is open in an active tab before scraping.
+      Make sure LinkedIn is open in an active tab. Posts will be captured as screenshots.
     </div>
 
     <!-- Status Bar -->
@@ -52,44 +52,79 @@
       <span id="lastScrape" class="muted"></span>
     </div>
 
-    <!-- Stats Grid -->
-    <div class="stats-grid">
-      <div class="stat-card stat-green">
-        <div class="stat-num" id="statWithEmail">–</div>
-        <div class="stat-label">With Email</div>
-        <a class="stat-link" id="linkWithEmail" href="#" target="_blank">View Sheet ↗</a>
+    <!-- Tab Navigation -->
+    <div class="popup-tabs">
+      <button class="popup-tab active" data-tab="gallery">📸 Gallery</button>
+      <button class="popup-tab" data-tab="stats">📊 Stats</button>
+    </div>
+
+    <!-- Gallery Tab -->
+    <div id="tab-gallery" class="popup-tab-content">
+      <div class="gallery-header">
+        <span id="galleryCount" class="muted">No captures yet</span>
+        <button id="btnClearGallery" class="btn-small" title="Clear gallery">🗑</button>
       </div>
-      <div class="stat-card stat-orange">
-        <div class="stat-num" id="statWithoutEmail">–</div>
-        <div class="stat-label">No Email</div>
-        <a class="stat-link" id="linkWithoutEmail" href="#" target="_blank">View Sheet ↗</a>
-      </div>
-      <div class="stat-card stat-blue">
-        <div class="stat-num" id="statEmailsSent">–</div>
-        <div class="stat-label">Emails Sent</div>
-      </div>
-      <div class="stat-card stat-purple">
-        <div class="stat-num" id="statFollowups">–</div>
-        <div class="stat-label">Follow-ups</div>
+      <div id="galleryGrid" class="gallery-grid">
+        <!-- Post cards injected by JS -->
+        <div class="gallery-empty" id="galleryEmpty">
+          <div class="gallery-empty-icon">📷</div>
+          <p>No post screenshots yet.</p>
+          <p class="muted">Click "Capture LinkedIn Posts" while on a LinkedIn page.</p>
+        </div>
       </div>
     </div>
 
-    <!-- Action Buttons -->
-    <div class="action-row">
-      <button id="btnFollowup" class="btn btn-secondary">
-        📧 Send Follow-ups
-      </button>
-      <button id="btnReplies" class="btn btn-secondary">
-        🔄 Check Replies
-      </button>
+    <!-- Stats Tab -->
+    <div id="tab-stats" class="popup-tab-content hidden">
+      <!-- Stats Grid -->
+      <div class="stats-grid">
+        <div class="stat-card stat-green">
+          <div class="stat-num" id="statWithEmail">–</div>
+          <div class="stat-label">With Email</div>
+          <a class="stat-link" id="linkWithEmail" href="#" target="_blank">View Sheet ↗</a>
+        </div>
+        <div class="stat-card stat-orange">
+          <div class="stat-num" id="statWithoutEmail">–</div>
+          <div class="stat-label">No Email</div>
+          <a class="stat-link" id="linkWithoutEmail" href="#" target="_blank">View Sheet ↗</a>
+        </div>
+        <div class="stat-card stat-blue">
+          <div class="stat-num" id="statEmailsSent">–</div>
+          <div class="stat-label">Emails Sent</div>
+        </div>
+        <div class="stat-card stat-purple">
+          <div class="stat-num" id="statFollowups">–</div>
+          <div class="stat-label">Follow-ups</div>
+        </div>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="action-row">
+        <button id="btnFollowup" class="btn btn-secondary">
+          📧 Send Follow-ups
+        </button>
+        <button id="btnReplies" class="btn btn-secondary">
+          🔄 Check Replies
+        </button>
+      </div>
+
+      <div class="action-row">
+        <button id="btnReport" class="btn btn-outline btn-full">
+          📊 Generate Monthly Report
+        </button>
+      </div>
     </div>
 
-    <div class="action-row">
-      <button id="btnReport" class="btn btn-outline btn-full">
-        📊 Generate Monthly Report
-      </button>
-    </div>
+  </div>
 
+  <!-- Image Preview Modal -->
+  <div id="imageModal" class="modal hidden">
+    <div class="modal-backdrop" id="modalBackdrop"></div>
+    <div class="modal-content">
+      <button class="modal-close" id="modalClose">✕</button>
+      <img id="modalImage" src="" alt="Post screenshot">
+      <div id="modalInfo" class="modal-info"></div>
+    </div>
   </div>
 
   <div class="footer">

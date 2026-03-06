@@ -1,43 +1,24 @@
 // content/linkedin_scraper.js
-// Injected into linkedin.com/feed/* pages to scrape relevant posts
-// Note: Content scripts run in isolated world; no ES module imports allowed.
-// All logic must be self-contained.
+// Screenshot-based LinkedIn post capture
+// Finds post elements, scrolls each into view, and requests the service worker
+// to capture visible-tab screenshots. Also sends bounding-rect info so the
+// background can crop to the individual post.
 
 (function () {
   "use strict";
 
   const DEFAULT_KEYWORD = "UAE job positions Oil and gas onshore or offshore";
-  const EMAIL_REGEX     = /[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}/g;
-  const MAX_TEXT_LEN    = 500;
-
-  // Matches labeled phone numbers: "Contact: 8655644356" or "Mobile: +971 50 123 4567"
-  // and standalone 10-13 digit numbers
-  function extractPhones(text) {
-    const phones = new Set();
-    // Labeled: Contact/Mobile/Tel/Phone/Call/WhatsApp followed by number
-    const labeledRe = /(?:contact|mobile|tel|ph(?:one)?|call|whatsapp)[:\s#.+]*(\+?[\d][\d\s\-]{6,15}\d)/gi;
-    let m;
-    while ((m = labeledRe.exec(text)) !== null) {
-      const digits = m[1].replace(/[\s\-]/g, "");
-      if (digits.length >= 8 && digits.length <= 15) phones.add(digits);
-    }
-    // Standalone 10-13 digit sequences (covers Indian/UAE numbers)
-    const standaloneRe = /(\+?\d{10,13})(?!\d)/g;
-    while ((m = standaloneRe.exec(text)) !== null) {
-      const digits = m[1].replace(/[\s\-]/g, "");
-      if (digits.length >= 10 && digits.length <= 13) phones.add(digits);
-    }
-    return [...phones];
-  }
 
   // Strong domain words that alone indicate relevance
-  const STRONG_WORDS = ["oil", "gas", "offshore", "onshore", "uae", "dubai", "abu dhabi",
-                        "drilling", "petroleum", "refinery", "rig", "upstream", "downstream"];
+  const STRONG_WORDS = [
+    "oil", "gas", "offshore", "onshore", "uae", "dubai", "abu dhabi",
+    "drilling", "petroleum", "refinery", "rig", "upstream", "downstream"
+  ];
 
-  /**
-   * Flexible keyword match: true if the full phrase matches, OR any strong word
-   * appears, OR ≥2 keyword words (≥3 chars) appear.
-   */
+  let isRunning = false;
+
+  // ─── Keyword Matching ─────────────────────────────────────────────────────
+
   function keywordMatches(text, keyword) {
     const lower = text.toLowerCase();
     if (lower.includes(keyword.toLowerCase())) return true;
@@ -46,275 +27,12 @@
     return words.filter(w => lower.includes(w)).length >= 2;
   }
 
-  let isRunning = false;
+  // ─── Find Post Containers ─────────────────────────────────────────────────
 
-  // ─── Helpers ──────────────────────────────────────────────────────────────
-
-  function extractEmails(text) {
-    const matches = text.match(EMAIL_REGEX);
-    return matches ? [...new Set(matches.map(e => e.toLowerCase()))] : [];
-  }
-
-
-  function extractPostUrl(element) {
-    const selectors = [
-      'a[href*="/posts/"]',
-      'a[href*="/feed/update/"]',
-      'a[href*="activity"]',
-      'a[href*="/search/results/"]',
-      '.update-components-update-v2__content-container a[href*="linkedin.com"]',
-      'a[data-tracking-control-name*="post"]'
-    ];
-    for (const sel of selectors) {
-      const anchor = element.querySelector(sel);
-      if (anchor && anchor.href) {
-        try {
-          const u = new URL(anchor.href);
-          return u.origin + u.pathname;
-        } catch {
-          return anchor.href;
-        }
-      }
-    }
-    // Fallback: first linkedin.com anchor in element
-    const allAnchors = element.querySelectorAll('a[href*="linkedin.com"]');
-    for (const a of allAnchors) {
-      if (a.href && !a.href.includes("javascript")) return a.href.split("?")[0];
-    }
-    return "";
-  }
-
-  function extractAuthorName(element) {
-    const selectors = [
-      // Search results page (modern)
-      ".update-components-actor__name",
-      ".update-components-actor__name span[aria-hidden='true']",
-      ".entity-result__title-text a span[aria-hidden='true']",
-      ".entity-result__title-text",
-      // Feed page
-      ".feed-shared-actor__name",
-      ".feed-shared-actor__title span[aria-hidden='true']",
-      // Generic
-      "[data-anonymize='person-name']",
-      ".actor-name",
-      ".visually-hidden + span"
-    ];
-    for (const sel of selectors) {
-      const el = element.querySelector(sel);
-      if (el && el.innerText?.trim()) return el.innerText.trim().split("\n")[0].trim();
-    }
-    return "Unknown";
-  }
-
-  function extractAuthorProfile(element) {
-    const selectors = [
-      // Search results page (modern)
-      ".update-components-actor__container-link",
-      ".update-components-actor__meta-link",
-      ".entity-result__title-text a",
-      // Feed page
-      ".feed-shared-actor__container-link",
-      // Generic
-      "a[href*='/in/']",
-      "a[href*='/company/']"
-    ];
-    for (const sel of selectors) {
-      const anchor = element.querySelector(sel);
-      if (anchor && anchor.href && anchor.href.includes("linkedin.com")) {
-        try {
-          const u = new URL(anchor.href);
-          return u.origin + u.pathname;
-        } catch {
-          return anchor.href;
-        }
-      }
-    }
-    return "";
-  }
-
-  function extractPostText(element) {
-    const selectors = [
-      // Search results page (modern)
-      ".update-components-text",
-      ".update-components-update-v2__commentary",
-      ".feed-shared-inline-show-more-text",
-      // Feed page
-      ".feed-shared-text",
-      ".feed-shared-update-v2__description",
-      // Generic
-      "[data-test-id='main-feed-activity-card__commentary']",
-      ".break-words span[dir]",
-      ".attributed-text-segment-list__content"
-    ];
-    for (const sel of selectors) {
-      const el = element.querySelector(sel);
-      if (el && el.innerText?.trim()) {
-        return el.innerText.trim();
-      }
-    }
-    // Fallback: get all visible text in the post
-    return element.innerText?.trim().substring(0, MAX_TEXT_LEN * 2) || "";
-  }
-
-  // ─── Scroll Handler ───────────────────────────────────────────────────────
-
-  function scrollToLoadMorePosts(callback) {
-    let scrollCount = 0;
-    const maxScrolls = 6;
-    const scrollInterval = setInterval(() => {
-      window.scrollBy(0, window.innerHeight);
-      scrollCount++;
-      if (scrollCount >= maxScrolls) {
-        clearInterval(scrollInterval);
-        setTimeout(callback, 3000); // Wait longer for search results to render
-      }
-    }, 1800);
-  }
-
-  /**
-   * Walks all text nodes in the document and returns elements whose
-   * combined text contains keyword-related words.
-   */
-  function findPostsByTextScan(keyword) {
-    const results = [];
-    const seen    = new Set();
-
-    // Build an array of individual significant words to search for
-    const scanWords = [
-      ...STRONG_WORDS,
-      ...keyword.toLowerCase().split(/\s+/).filter(w => w.length >= 3)
-    ];
-
-    const walker = document.createTreeWalker(
-      document.body,
-      NodeFilter.SHOW_TEXT,
-      null
-    );
-
-    let node;
-    while ((node = walker.nextNode())) {
-      const text = node.nodeValue || "";
-      const lower = text.toLowerCase();
-      if (!scanWords.some(w => lower.includes(w))) continue;
-
-      // Walk up to find a sensible post container:
-      // stop at li, article, or a div/section that is large enough
-      let container = node.parentElement;
-      while (container && container !== document.body) {
-        const tag  = container.tagName;
-        const len  = (container.innerText || "").length;
-
-        if ((tag === "LI" || tag === "ARTICLE") && len > 100) break;
-
-        if ((tag === "DIV" || tag === "SECTION") && len > 200) {
-          const parent = container.parentElement;
-          if (parent && parent !== document.body) {
-            const parentLen = (parent.innerText || "").length;
-            if (parentLen < len * 3) {
-              container = parent;
-              continue;
-            }
-          }
-          break;
-        }
-
-        container = container.parentElement;
-      }
-
-      if (!container || container === document.body) continue;
-      if (seen.has(container)) continue;
-
-      // Keep only top-level containers (skip if an ancestor is already captured)
-      let dominated = false;
-      for (const existing of seen) {
-        if (existing.contains(container)) { dominated = true; break; }
-        if (container.contains(existing)) { seen.delete(existing); }
-      }
-      if (!dominated) {
-        seen.add(container);
-        results.push(container);
-      }
-    }
-
-    return results;
-  }
-
-  /**
-   * Nuclear fallback: find ALL large list items or divs that contain
-   * keyword-matching text, regardless of structure.
-   */
-  function findPostsBruteForce(keyword) {
-    const candidates = [];
-
-    // Collect all li, article, and significant div containers
-    const allItems = [
-      ...document.querySelectorAll("li"),
-      ...document.querySelectorAll("article"),
-      ...document.querySelectorAll("div[class]")
-    ];
-
-    for (const el of allItems) {
-      const text = (el.innerText || "").trim();
-      if (text.length < 150 || text.length > 10000) continue; // skip tiny and page-level elements
-      if (!keywordMatches(text, keyword)) continue;
-
-      // Must contain at least one link (posts always have links)
-      if (!el.querySelector("a")) continue;
-
-      candidates.push({ el, len: text.length });
-    }
-
-    // Deduplicate: if two candidates overlap, keep the smaller (more specific) one
-    const sorted = candidates.sort((a, b) => a.len - b.len);
-    const results = [];
-    const used = new Set();
-
-    for (const { el } of sorted) {
-      let dominated = false;
-      for (const existing of used) {
-        if (existing.contains(el)) { dominated = true; break; }
-      }
-      if (dominated) continue;
-
-      // Remove any already-added elements that this one contains
-      for (let i = results.length - 1; i >= 0; i--) {
-        if (el.contains(results[i])) {
-          used.delete(results[i]);
-          results.splice(i, 1);
-        }
-      }
-
-      results.push(el);
-      used.add(el);
-    }
-
-    return results;
-  }
-
-  /**
-   * Logs DOM structure info to help diagnose selector failures.
-   */
-  function logDomDiscovery() {
-    const attrCounts = {};
-    document.querySelectorAll("*").forEach(el => {
-      [...el.attributes].filter(a => a.name.startsWith("data-")).forEach(a => {
-        attrCounts[a.name] = (attrCounts[a.name] || 0) + 1;
-      });
-    });
-    // Show only attrs with >2 occurrences (likely structural)
-    const filtered = Object.fromEntries(Object.entries(attrCounts).filter(([,v]) => v > 2));
-    console.info("[LinkedIn Scraper] DOM data-attributes (>2 occurrences):", filtered);
-    console.info("[LinkedIn Scraper] article count:", document.querySelectorAll("article").length);
-    console.info("[LinkedIn Scraper] li count (total):", document.querySelectorAll("li").length);
-    console.info("[LinkedIn Scraper] li count (>100 chars):",
-      [...document.querySelectorAll("li")].filter(el => (el.innerText || "").length > 100).length);
-  }
-
-  function scrapeLinkedInPosts(keyword) {
+  function findPostContainers(keyword) {
     const searchKeyword = (keyword || DEFAULT_KEYWORD).toLowerCase();
-    const posts         = [];
 
-    // ── Stage 1: CSS selectors (fast) ──
+    // Stage 1: CSS selectors (fast)
     const selectorGroups = [
       ["[data-urn*='activity']", "[data-urn*='share']"],
       ["[data-finite-scroll-hotkey-item]"],
@@ -336,101 +54,249 @@
       }
       found = [...new Set(found)].filter(el => (el.innerText || "").trim().length > 100);
       if (found.length > 0) {
-        console.info(`[LinkedIn Scraper] Stage 1 hit: [${selectors.join(",")}] → ${found.length} elements`);
+        console.info(`[LinkedIn Scraper] Selector hit: [${selectors.join(",")}] → ${found.length}`);
         containers = found;
         break;
       }
     }
 
-    // ── Stage 2: large list items inside main content area ──
+    // Stage 2: large list items in main
     if (containers.length === 0) {
-      const mainEl = document.querySelector("main")
-                  || document.querySelector("[role='main']")
-                  || document.querySelector("#main");
+      const mainEl = document.querySelector("main") ||
+                     document.querySelector("[role='main']") ||
+                     document.querySelector("#main");
       const scope = mainEl || document.body;
-      const allLis = [...scope.querySelectorAll("li")].filter(el => {
+      containers = [...scope.querySelectorAll("li")].filter(el => {
         const len = (el.innerText || "").length;
         return len > 150 && len < 8000;
       });
-      if (allLis.length > 0) {
-        console.info(`[LinkedIn Scraper] Stage 2: ${allLis.length} large <li> elements in main area`);
-        containers = allLis;
-      }
     }
 
-    // ── Stage 3: text-node TreeWalker ──
+    // Stage 3: brute-force large divs
     if (containers.length === 0) {
-      console.info("[LinkedIn Scraper] Stage 3: text-node scan...");
-      containers = findPostsByTextScan(searchKeyword);
-      console.info(`[LinkedIn Scraper] Stage 3: text-scan found ${containers.length} containers`);
+      const all = [
+        ...document.querySelectorAll("li"),
+        ...document.querySelectorAll("article"),
+        ...document.querySelectorAll("div[class]")
+      ];
+      containers = all.filter(el => {
+        const text = (el.innerText || "").trim();
+        return text.length > 150 && text.length < 10000 &&
+               keywordMatches(text, searchKeyword) &&
+               el.querySelector("a");
+      });
     }
 
-    // ── Stage 4: brute-force (nuclear) ──
-    if (containers.length === 0) {
-      console.info("[LinkedIn Scraper] Stage 4: brute-force scan...");
-      containers = findPostsBruteForce(searchKeyword);
-      console.info(`[LinkedIn Scraper] Stage 4: brute-force found ${containers.length} containers`);
-    }
+    // Filter by keyword
+    containers = containers.filter(el => {
+      const text = (el.innerText || "").trim();
+      return text.length > 50 && keywordMatches(text, searchKeyword);
+    });
 
-    if (containers.length === 0) {
-      console.warn("[LinkedIn Scraper] All 4 stages failed to find post containers.");
-      logDomDiscovery();
-      return posts;
-    }
-
-    console.info(`[LinkedIn Scraper] Filtering ${containers.length} containers by keyword...`);
-
-    let skippedNoText = 0, skippedNoKeyword = 0;
+    // Deduplicate nested containers
+    const unique = [];
+    const used = new Set();
     for (const el of containers) {
-      try {
-        const postText = extractPostText(el);
-        if (!postText) { skippedNoText++; continue; }
-        if (!keywordMatches(postText, searchKeyword)) { skippedNoKeyword++; continue; }
-
-        const postUrl       = extractPostUrl(el);
-        const authorName    = extractAuthorName(el);
-        const authorProfile = extractAuthorProfile(el);
-        const emails        = extractEmails(postText);
-        const phones        = extractPhones(postText);
-
-        posts.push({
-          postUrl:        postUrl || window.location.href,
-          authorName,
-          authorProfile,
-          postText:       postText.substring(0, MAX_TEXT_LEN),
-          emails,
-          phones,
-          hasEmail:       emails.length > 0,
-          scrapedAt:      new Date().toISOString()
-        });
-
-        console.info(`[LinkedIn Scraper] ✓ ${authorName} | Email: ${emails.join(", ") || "none"} | Phone: ${phones.join(", ") || "none"}`);
-      } catch (err) {
-        console.warn("[LinkedIn Scraper] Error parsing element:", err);
+      let dominated = false;
+      for (const ex of used) {
+        if (ex.contains(el)) { dominated = true; break; }
+      }
+      if (!dominated) {
+        // Remove children already added
+        for (let i = unique.length - 1; i >= 0; i--) {
+          if (el.contains(unique[i])) {
+            used.delete(unique[i]);
+            unique.splice(i, 1);
+          }
+        }
+        unique.push(el);
+        used.add(el);
       }
     }
 
-    console.info(`[LinkedIn Scraper] Summary: ${posts.length} matched, ${skippedNoText} empty, ${skippedNoKeyword} no keyword match`);
-    return posts;
+    return unique;
   }
 
-  // ─── Run and Communicate ─────────────────────────────────────────────────
+  // ─── URL / Author Extraction (minimal, for metadata) ─────────────────────
 
-  function runScraper(keyword) {
+  function extractPostUrl(element) {
+    const selectors = [
+      'a[href*="/posts/"]', 'a[href*="/feed/update/"]',
+      'a[href*="activity"]', 'a[href*="/search/results/"]',
+      'a[data-tracking-control-name*="post"]'
+    ];
+    for (const sel of selectors) {
+      const anchor = element.querySelector(sel);
+      if (anchor && anchor.href) {
+        try {
+          const u = new URL(anchor.href);
+          return u.origin + u.pathname;
+        } catch { return anchor.href; }
+      }
+    }
+    const allAnchors = element.querySelectorAll('a[href*="linkedin.com"]');
+    for (const a of allAnchors) {
+      if (a.href && !a.href.includes("javascript")) return a.href.split("?")[0];
+    }
+    return "";
+  }
+
+  function extractAuthorName(element) {
+    const selectors = [
+      ".update-components-actor__name",
+      ".update-components-actor__name span[aria-hidden='true']",
+      ".entity-result__title-text a span[aria-hidden='true']",
+      ".entity-result__title-text",
+      ".feed-shared-actor__name",
+      ".feed-shared-actor__title span[aria-hidden='true']",
+      "[data-anonymize='person-name']",
+      ".actor-name"
+    ];
+    for (const sel of selectors) {
+      const el = element.querySelector(sel);
+      if (el && el.innerText?.trim()) return el.innerText.trim().split("\n")[0].trim();
+    }
+    return "Unknown";
+  }
+
+  function extractAuthorProfile(element) {
+    const selectors = [
+      ".update-components-actor__container-link",
+      ".update-components-actor__meta-link",
+      ".entity-result__title-text a",
+      ".feed-shared-actor__container-link",
+      "a[href*='/in/']",
+      "a[href*='/company/']"
+    ];
+    for (const sel of selectors) {
+      const anchor = element.querySelector(sel);
+      if (anchor && anchor.href && anchor.href.includes("linkedin.com")) {
+        try {
+          const u = new URL(anchor.href);
+          return u.origin + u.pathname;
+        } catch { return anchor.href; }
+      }
+    }
+    return "";
+  }
+
+  // ─── Scroll to Load Posts ──────────────────────────────────────────────────
+
+  function scrollToLoadMorePosts() {
+    return new Promise(resolve => {
+      let scrollCount = 0;
+      const maxScrolls = 6;
+      const scrollInterval = setInterval(() => {
+        window.scrollBy(0, window.innerHeight);
+        scrollCount++;
+        if (scrollCount >= maxScrolls) {
+          clearInterval(scrollInterval);
+          setTimeout(resolve, 3000);
+        }
+      }, 1800);
+    });
+  }
+
+  // ─── Capture Individual Post ───────────────────────────────────────────────
+
+  /**
+   * Scrolls a post element into view, then asks the service worker to
+   * capture the visible tab. Sends back the bounding rect so the service
+   * worker can crop the screenshot to just this post.
+   */
+  async function capturePostScreenshot(element, index) {
+    // Scroll element into view centered
+    element.scrollIntoView({ behavior: "smooth", block: "center" });
+    // Wait for scroll and any lazy-loaded content
+    await new Promise(r => setTimeout(r, 800));
+
+    const rect = element.getBoundingClientRect();
+    const dpr = window.devicePixelRatio || 1;
+
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage({
+        type: "CAPTURE_POST_SCREENSHOT",
+        postIndex: index,
+        rect: {
+          x: Math.round(rect.x * dpr),
+          y: Math.round(rect.y * dpr),
+          width: Math.round(rect.width * dpr),
+          height: Math.round(rect.height * dpr)
+        },
+        dpr
+      }, (response) => {
+        if (chrome.runtime.lastError) {
+          reject(new Error(chrome.runtime.lastError.message));
+        } else if (response?.success) {
+          resolve(response.imageDataUrl);
+        } else {
+          reject(new Error(response?.error || "Screenshot capture failed"));
+        }
+      });
+    });
+  }
+
+  // ─── Main Runner ───────────────────────────────────────────────────────────
+
+  async function runScraper(keyword) {
     if (isRunning) {
-      console.warn("[LinkedIn Scraper] Already running, skipping duplicate trigger.");
+      console.warn("[LinkedIn Scraper] Already running.");
       return;
     }
     isRunning = true;
-    console.info("[LinkedIn Scraper] Starting scrape with keyword:", keyword || DEFAULT_KEYWORD);
+    console.info("[LinkedIn Scraper] Starting screenshot-based capture:", keyword || DEFAULT_KEYWORD);
 
-    scrollToLoadMorePosts(() => {
-      const posts = scrapeLinkedInPosts(keyword);
-      console.info(`[LinkedIn Scraper] Scraped ${posts.length} matching posts.`);
+    try {
+      // Scroll to load more posts
+      await scrollToLoadMorePosts();
 
+      // Scroll back to top before capturing
+      window.scrollTo(0, 0);
+      await new Promise(r => setTimeout(r, 1000));
+
+      const containers = findPostContainers(keyword);
+      console.info(`[LinkedIn Scraper] Found ${containers.length} post containers to capture`);
+
+      if (containers.length === 0) {
+        chrome.runtime.sendMessage({
+          type: "POSTS_CAPTURED",
+          payload: []
+        });
+        isRunning = false;
+        return;
+      }
+
+      const capturedPosts = [];
+      const maxCaptures = 15; // Limit to avoid memory issues
+
+      for (let i = 0; i < Math.min(containers.length, maxCaptures); i++) {
+        const el = containers[i];
+        try {
+          console.info(`[LinkedIn Scraper] Capturing post ${i + 1}/${Math.min(containers.length, maxCaptures)}...`);
+
+          const imageDataUrl = await capturePostScreenshot(el, i);
+
+          capturedPosts.push({
+            postIndex: i,
+            postUrl: extractPostUrl(el) || window.location.href,
+            authorName: extractAuthorName(el),
+            authorProfile: extractAuthorProfile(el),
+            imageDataUrl,
+            capturedAt: new Date().toISOString()
+          });
+
+          console.info(`[LinkedIn Scraper] ✓ Captured post ${i + 1}: ${capturedPosts[capturedPosts.length - 1].authorName}`);
+        } catch (err) {
+          console.warn(`[LinkedIn Scraper] Failed to capture post ${i + 1}:`, err.message);
+        }
+      }
+
+      console.info(`[LinkedIn Scraper] Total captured: ${capturedPosts.length}`);
+
+      // Send all captured posts to service worker for OCR processing
       chrome.runtime.sendMessage({
-        type:    "POSTS_SCRAPED",
-        payload: posts
+        type: "POSTS_CAPTURED",
+        payload: capturedPosts
       }, (response) => {
         if (chrome.runtime.lastError) {
           console.error("[LinkedIn Scraper] Message error:", chrome.runtime.lastError.message);
@@ -439,19 +305,22 @@
         }
         isRunning = false;
       });
-    });
+
+    } catch (err) {
+      console.error("[LinkedIn Scraper] Fatal error:", err);
+      isRunning = false;
+    }
   }
 
   // ─── Entry Points ──────────────────────────────────────────────────────────
 
-  // 1. Listen for programmatic trigger from service worker (via scripting.executeScript → dispatchEvent)
+  // Listen for trigger from service worker
   window.addEventListener("linkedin_scraper_trigger", (e) => {
     const keyword = e.detail?.keyword || null;
     runScraper(keyword);
   });
 
-  // 2. Auto-run if on the feed page (useful for search result pages)
-  //    Only auto-run if the page URL already suggests it's a relevant search
+  // Auto-run on relevant search pages
   if (window.location.href.includes("keywords=")) {
     const urlKeyword = decodeURIComponent(
       new URLSearchParams(window.location.search).get("keywords") || ""
@@ -461,5 +330,5 @@
     }
   }
 
-  console.info("[LinkedIn Scraper] Content script loaded and ready.");
+  console.info("[LinkedIn Scraper] Content script loaded (screenshot mode).");
 })();

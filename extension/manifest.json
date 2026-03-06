@@ -1,15 +1,16 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Data Feed Generator",
-  "version": "1.0.0",
-  "description": "Scrapes LinkedIn posts for UAE Oil & Gas jobs, manages client outreach via Gmail and Google Sheets",
+  "version": "2.0.0",
+  "description": "Captures LinkedIn post screenshots, extracts contacts via OCR, manages client outreach via Gmail and Google Sheets",
   "permissions": [
     "identity",
     "storage",
     "alarms",
     "tabs",
     "scripting",
-    "activeTab"
+    "activeTab",
+    "offscreen"
   ],
   "host_permissions": [
     "https://www.linkedin.com/*",

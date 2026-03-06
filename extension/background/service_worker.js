@@ -1,5 +1,6 @@
 // background/service_worker.js
 // Main orchestrator – entry point for the Chrome Extension service worker
+// v2.0: Screenshot-based capture with OCR processing
 
 import { initializeAlarms } from "./scheduler.js";
 import {
@@ -10,10 +11,79 @@ import {
 import { generateAndSendMonthlyReport } from "./report_generator.js";
 import { ensureSheetsExist } from "../api/sheets_api.js";
 import { sendEmail } from "../api/gmail_api.js";
+import { extractContactsFromText } from "../utils/ocr_processor.js";
 import { ALARM_NAMES, SHEETS } from "../utils/constants.js";
 import { logger } from "../utils/logger.js";
 
 const MODULE = "service_worker";
+
+// ─── Offscreen Document Management ─────────────────────────────────────────
+
+let offscreenCreated = false;
+
+async function ensureOffscreenDocument() {
+  if (offscreenCreated) return;
+
+  // Check if already exists
+  const existingContexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"]
+  });
+
+  if (existingContexts.length > 0) {
+    offscreenCreated = true;
+    return;
+  }
+
+  await chrome.offscreen.createDocument({
+    url: "offscreen/offscreen.html",
+    reasons: ["DOM_PARSER"],
+    justification: "OCR processing requires DOM access for canvas image manipulation"
+  });
+  offscreenCreated = true;
+  logger.info(MODULE, "Offscreen document created for OCR");
+}
+
+// ─── Screenshot Cropping ────────────────────────────────────────────────────
+
+/**
+ * Crop a full-tab screenshot to just the post area using OffscreenCanvas.
+ * Since service workers don't have DOM, we send to offscreen doc for cropping.
+ */
+async function cropScreenshot(fullScreenshotDataUrl, rect) {
+  await ensureOffscreenDocument();
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: "CROP_IMAGE",
+      imageDataUrl: fullScreenshotDataUrl,
+      rect
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(response);
+      }
+    });
+  });
+}
+
+/**
+ * Run OCR on an image via the offscreen document.
+ */
+async function runOCRViaOffscreen(imageDataUrl) {
+  await ensureOffscreenDocument();
+  return new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      type: "RUN_OCR",
+      imageDataUrl
+    }, (response) => {
+      if (chrome.runtime.lastError) {
+        reject(new Error(chrome.runtime.lastError.message));
+      } else {
+        resolve(response || "");
+      }
+    });
+  });
+}
 
 // ─── Extension Lifecycle ───────────────────────────────────────────────────
 
@@ -21,7 +91,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   logger.info(MODULE, `Extension installed/updated: ${details.reason}`);
 
   if (details.reason === "install") {
-    // Open options page on fresh install
     chrome.runtime.openOptionsPage();
   }
 
@@ -74,7 +143,6 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   logger.debug(MODULE, `Message received: ${message.type}`, { from: sender.id || "popup" });
 
-  // Must return true to use async sendResponse
   handleMessage(message, sender)
     .then(result => sendResponse({ success: true, data: result }))
     .catch(err  => {
@@ -88,10 +156,145 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 async function handleMessage(message, sender) {
   switch (message.type) {
 
-    // Triggered by popup "Scrape Now" button
+    // ── Screenshot Capture (called by content script per-post) ──
+    case "CAPTURE_POST_SCREENSHOT": {
+      const tabId = sender.tab?.id;
+      if (!tabId) throw new Error("No tab ID for screenshot");
+
+      // Capture the entire visible tab
+      const fullScreenshot = await chrome.tabs.captureVisibleTab(null, {
+        format: "png"
+      });
+
+      // Crop to the post's bounding rect
+      const { rect } = message;
+      if (rect && rect.width > 0 && rect.height > 0) {
+        try {
+          const cropped = await cropScreenshot(fullScreenshot, rect);
+          return { imageDataUrl: cropped };
+        } catch (err) {
+          logger.warn(MODULE, "Crop failed, returning full screenshot", err.message);
+          return { imageDataUrl: fullScreenshot };
+        }
+      }
+
+      return { imageDataUrl: fullScreenshot };
+    }
+
+    // ── Posts Captured (sent by content script with all screenshots) ──
+    case "POSTS_CAPTURED": {
+      const capturedPosts = message.payload || [];
+      if (!Array.isArray(capturedPosts) || capturedPosts.length === 0) {
+        return { processed: 0, withEmail: 0, withoutEmail: 0 };
+      }
+
+      logger.info(MODULE, `Processing ${capturedPosts.length} captured posts`);
+
+      // Store images for popup gallery
+      const galleryItems = [];
+      const processedPosts = [];
+
+      for (const post of capturedPosts) {
+        try {
+          // Run OCR on each image
+          let ocrText = "";
+          try {
+            ocrText = await runOCRViaOffscreen(post.imageDataUrl);
+          } catch (err) {
+            logger.warn(MODULE, `OCR failed for post ${post.postIndex}`, err.message);
+          }
+
+          // Extract contacts from OCR text
+          const contacts = extractContactsFromText(ocrText);
+
+          const processedPost = {
+            postUrl: post.postUrl,
+            authorName: post.authorName,
+            authorProfile: post.authorProfile,
+            postText: contacts.rawText.substring(0, 500),
+            emails: contacts.emails,
+            phones: contacts.phones,
+            hasEmail: contacts.emails.length > 0,
+            scrapedAt: post.capturedAt,
+            imageDataUrl: post.imageDataUrl
+          };
+
+          processedPosts.push(processedPost);
+
+          galleryItems.push({
+            postIndex: post.postIndex,
+            postUrl: post.postUrl,
+            authorName: post.authorName,
+            authorProfile: post.authorProfile,
+            imageDataUrl: post.imageDataUrl,
+            emails: contacts.emails,
+            phones: contacts.phones,
+            ocrText: contacts.rawText.substring(0, 300),
+            capturedAt: post.capturedAt
+          });
+
+          logger.info(MODULE,
+            `Post ${post.postIndex}: ${post.authorName} | ` +
+            `Emails: ${contacts.emails.join(", ") || "none"} | ` +
+            `Phones: ${contacts.phones.join(", ") || "none"}`
+          );
+        } catch (err) {
+          logger.error(MODULE, `Failed to process post ${post.postIndex}`, err.message);
+        }
+      }
+
+      // Store gallery data for popup display
+      await chrome.storage.local.set({
+        capturedGallery: galleryItems,
+        lastCaptureTime: new Date().toISOString()
+      });
+
+      // Save to sheets (reuse existing classifier)
+      if (processedPosts.length > 0) {
+        try {
+          await ensureSheetsExist([
+            SHEETS.WITH_EMAIL,
+            SHEETS.WITHOUT_EMAIL,
+            SHEETS.EMAIL_LOG,
+            SHEETS.MONTHLY_REPORT
+          ]);
+          await classifyAndSavePosts(processedPosts);
+        } catch (err) {
+          logger.error(MODULE, "Failed to save to sheets", err.message);
+        }
+      }
+
+      // Update stats
+      await chrome.storage.local.set({
+        lastScrapeTime: new Date().toISOString()
+      });
+
+      return {
+        processed: processedPosts.length,
+        withEmail: processedPosts.filter(p => p.hasEmail).length,
+        withoutEmail: processedPosts.filter(p => !p.hasEmail).length
+      };
+    }
+
+    // ── Legacy: Direct DOM scraping results (backward compat) ──
+    case "POSTS_SCRAPED": {
+      const posts = message.payload || [];
+      if (!Array.isArray(posts) || posts.length === 0) {
+        return { classified: 0, queued: 0 };
+      }
+
+      await ensureSheetsExist([
+        SHEETS.WITH_EMAIL, SHEETS.WITHOUT_EMAIL,
+        SHEETS.EMAIL_LOG, SHEETS.MONTHLY_REPORT
+      ]);
+
+      const result = await classifyAndSavePosts(posts);
+      return result;
+    }
+
+    // ── Trigger Scrape from Popup ──
     case "TRIGGER_SCRAPE": {
       const { keyword } = message;
-      // Inject content script into the active LinkedIn tab
       const tabs = await chrome.tabs.query({ active: true, currentWindow: true });
       if (!tabs[0]) throw new Error("No active tab found");
 
@@ -106,47 +309,41 @@ async function handleMessage(message, sender) {
         args: [keyword || null]
       });
 
-      return { message: "Scraper injected into LinkedIn tab" };
+      return { message: "Screenshot capture started on LinkedIn tab" };
     }
 
-    // Sent by content script after scraping
-    case "POSTS_SCRAPED": {
-      const posts = message.payload || [];
-      if (!Array.isArray(posts) || posts.length === 0) {
-        return { classified: 0, queued: 0 };
-      }
-
-      // Ensure sheets and headers are set up
-      await ensureSheetsExist([
-        SHEETS.WITH_EMAIL,
-        SHEETS.WITHOUT_EMAIL,
-        SHEETS.EMAIL_LOG,
-        SHEETS.MONTHLY_REPORT
-      ]);
-
-      const result = await classifyAndSavePosts(posts);
-      return result;
+    // ── Get Captured Gallery for Popup ──
+    case "GET_GALLERY": {
+      const { capturedGallery = [], lastCaptureTime } =
+        await chrome.storage.local.get(["capturedGallery", "lastCaptureTime"]);
+      return { gallery: capturedGallery, lastCaptureTime };
     }
 
-    // Manual send follow-ups from popup
+    // ── Clear Gallery ──
+    case "CLEAR_GALLERY": {
+      await chrome.storage.local.remove(["capturedGallery"]);
+      return { cleared: true };
+    }
+
+    // ── Follow-ups ──
     case "SEND_FOLLOWUPS": {
       const count = await sendFollowUpEmails();
       return { sent: count };
     }
 
-    // Manual check for replies from popup
+    // ── Check Replies ──
     case "CHECK_REPLIES": {
       const count = await pollGmailForReplies();
       return { updated: count };
     }
 
-    // Send monthly report manually
+    // ── Monthly Report ──
     case "SEND_REPORT": {
       const report = await generateAndSendMonthlyReport();
       return report;
     }
 
-    // Quick Gmail connectivity test — no Sheets calls
+    // ── Test Email ──
     case "SEND_TEST_EMAIL": {
       const { reportRecipient = "madhu@kushiconsultancy.com", senderEmail } =
         await chrome.storage.sync.get(["reportRecipient", "senderEmail"]);
@@ -159,7 +356,7 @@ async function handleMessage(message, sender) {
       return { to };
     }
 
-    // Get current live stats for popup display
+    // ── Stats ──
     case "GET_STATS": {
       const stats = await chrome.storage.local.get([
         "statsWithEmail", "statsWithoutEmail", "statsEmailsSent",
@@ -168,13 +365,11 @@ async function handleMessage(message, sender) {
       return stats;
     }
 
-    // Initialize / re-check sheets
+    // ── Init Sheets ──
     case "INIT_SHEETS": {
       await ensureSheetsExist([
-        SHEETS.WITH_EMAIL,
-        SHEETS.WITHOUT_EMAIL,
-        SHEETS.EMAIL_LOG,
-        SHEETS.MONTHLY_REPORT
+        SHEETS.WITH_EMAIL, SHEETS.WITHOUT_EMAIL,
+        SHEETS.EMAIL_LOG, SHEETS.MONTHLY_REPORT
       ]);
       return { initialized: true };
     }
@@ -185,12 +380,9 @@ async function handleMessage(message, sender) {
 }
 
 /**
- * This function is injected into the LinkedIn page to call the scraper.
- * It must be a standalone function (no closure over SW variables).
- * @param {string|null} keyword
+ * Injected into the LinkedIn page to trigger the content script.
  */
 function triggerScraperOnPage(keyword) {
-  // Signal the content script to run
   window.dispatchEvent(new CustomEvent("linkedin_scraper_trigger", {
     detail: { keyword }
   }));
