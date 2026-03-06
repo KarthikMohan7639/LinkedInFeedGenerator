@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Icon Generator – LinkedIn Feed Generator</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 30px; background: #f4f6f8; }
+    h2   { color: #0077B5; margin-bottom: 16px; }
+    .icons { display: flex; gap: 20px; align-items: flex-end; margin-bottom: 16px; }
+    canvas { border: 1px solid #ccc; border-radius: 6px; }
+    button {
+      background: #0077B5; color: white; border: none;
+      padding: 10px 24px; border-radius: 8px; font-size: 14px;
+      cursor: pointer; margin-top: 12px;
+    }
+    button:hover { background: #005885; }
+    p { color: #555; font-size: 13px; margin-top: 8px; }
+  </style>
+</head>
+<body>
+  <h2>🔗 LinkedIn Feed Generator – Icon Generator</h2>
+  <p>Click the button below to generate and download all three extension icons into the <code>assets/</code> folder.</p>
+
+  <div class="icons">
+    <div>
+      <div>16×16</div>
+      <canvas id="c16" width="16" height="16"></canvas>
+    </div>
+    <div>
+      <div>48×48</div>
+      <canvas id="c48" width="48" height="48"></canvas>
+    </div>
+    <div>
+      <div>128×128</div>
+      <canvas id="c128" width="128" height="128"></canvas>
+    </div>
+  </div>
+
+  <button id="btnDownload">⬇ Download All Icons</button>
+  <p>After downloading, move the files to the <code>assets/</code> folder inside the extension directory.</p>
+
+  <script>
+    function drawIcon(canvas, size) {
+      const ctx = canvas.getContext("2d");
+      const r   = size / 2;
+      const fs  = Math.max(size * 0.42, 7);
+
+      // Background circle
+      ctx.beginPath();
+      ctx.arc(r, r, r, 0, Math.PI * 2);
+      ctx.fillStyle = "#0077B5";
+      ctx.fill();
+
+      // Inner highlight
+      ctx.beginPath();
+      ctx.arc(r * 0.85, r * 0.7, r * 0.4, 0, Math.PI * 2);
+      ctx.fillStyle = "rgba(255,255,255,0.12)";
+      ctx.fill();
+
+      // Letter "L" in white
+      ctx.fillStyle = "white";
+      ctx.font      = `bold ${fs}px Arial`;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.fillText("L", r, r);
+    }
+
+    const sizes = [16, 48, 128];
+    sizes.forEach(s => drawIcon(document.getElementById(`c${s}`), s));
+
+    function downloadAll() {
+      sizes.forEach(s => {
+        const canvas = document.getElementById(`c${s}`);
+        const link   = document.createElement("a");
+        link.download = `icon${s}.png`;
+        link.href     = canvas.toDataURL("image/png");
+        link.click();
+      });
+      alert('Icons downloaded! Move them to the assets/ folder.');
+    }
+
+    document.getElementById('btnDownload').addEventListener('click', downloadAll);
+  </script>
+</body>
+</html>

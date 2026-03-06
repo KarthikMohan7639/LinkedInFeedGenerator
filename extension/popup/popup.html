@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="popup.css">
+  <title>LinkedIn Data Feed Generator</title>
+</head>
+<body>
+  <div class="header">
+    <div class="header-title">
+      <span class="logo">🔗</span>
+      <span>LinkedIn Feed Generator</span>
+    </div>
+    <button class="icon-btn" id="btnOptions" title="Settings">⚙</button>
+  </div>
+
+  <div class="container">
+
+    <!-- Auth Status -->
+    <div id="authBanner" class="banner banner-warning hidden">
+      ⚠ Not authenticated. Please
+      <button class="link-btn" id="btnAuth">Authenticate with Google</button>
+    </div>
+    <div id="successBanner" class="banner banner-success hidden"></div>
+    <div id="errorBanner"   class="banner banner-error hidden"></div>
+
+    <!-- Keyword -->
+    <div class="field-group">
+      <label for="keyword">Search Keyword</label>
+      <input type="text" id="keyword" name="keyword"
+             value="UAE job positions Oil and gas onshore or offshore"
+             placeholder="Search keyword...">
+    </div>
+
+    <!-- Scrape Button -->
+    <button id="btnScrape" class="btn btn-primary btn-full">
+      <span id="scrapeIcon">🔍</span>
+      <span id="scrapeText">Scrape LinkedIn Now</span>
+    </button>
+
+    <div id="scrapeHint" class="hint">
+      Make sure LinkedIn is open in an active tab before scraping.
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar">
+      <div class="status-item">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Idle</span>
+      </div>
+      <span id="lastScrape" class="muted"></span>
+    </div>
+
+    <!-- Stats Grid -->
+    <div class="stats-grid">
+      <div class="stat-card stat-green">
+        <div class="stat-num" id="statWithEmail">–</div>
+        <div class="stat-label">With Email</div>
+        <a class="stat-link" id="linkWithEmail" href="#" target="_blank">View Sheet ↗</a>
+      </div>
+      <div class="stat-card stat-orange">
+        <div class="stat-num" id="statWithoutEmail">–</div>
+        <div class="stat-label">No Email</div>
+        <a class="stat-link" id="linkWithoutEmail" href="#" target="_blank">View Sheet ↗</a>
+      </div>
+      <div class="stat-card stat-blue">
+        <div class="stat-num" id="statEmailsSent">–</div>
+        <div class="stat-label">Emails Sent</div>
+      </div>
+      <div class="stat-card stat-purple">
+        <div class="stat-num" id="statFollowups">–</div>
+        <div class="stat-label">Follow-ups</div>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="action-row">
+      <button id="btnFollowup" class="btn btn-secondary">
+        📧 Send Follow-ups
+      </button>
+      <button id="btnReplies" class="btn btn-secondary">
+        🔄 Check Replies
+      </button>
+    </div>
+
+    <div class="action-row">
+      <button id="btnReport" class="btn btn-outline btn-full">
+        📊 Generate Monthly Report
+      </button>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    <span id="footerStatus">Ready</span>
+    <a href="#" id="footerOptions">Options</a>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

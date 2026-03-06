@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="stylesheet" href="options.css">
+  <title>LinkedIn Feed Generator – Options</title>
+</head>
+<body>
+  <div class="page-header">
+    <div class="header-content">
+      <span class="logo">🔗</span>
+      <div>
+        <h1>LinkedIn Data Feed Generator</h1>
+        <p>Chrome Extension Settings</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="page-body">
+    <div id="saveSuccess" class="alert alert-success hidden">✓ Settings saved successfully!</div>
+    <div id="saveError"   class="alert alert-error hidden"></div>
+    <div id="authStatus"  class="alert alert-info hidden"></div>
+
+    <!-- ── Google Integration ── -->
+    <section class="card">
+      <h2>🔐 Google Integration</h2>
+
+      <div class="field-group">
+        <label for="clientId">Google OAuth Client ID <span class="required">*</span></label>
+        <input type="text" id="clientId" name="clientId"
+               placeholder="e.g. 123456789-abc.apps.googleusercontent.com">
+        <div class="help">
+          Create credentials in <a href="https://console.cloud.google.com/apis/credentials" target="_blank">Google Cloud Console</a>
+          as a <strong>Web application</strong> client. Add the Redirect URI below as an
+          <strong>Authorised redirect URI</strong>. Then paste the Client ID here.
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label>OAuth Redirect URI <span style="font-weight:400;color:#888;">(copy this into Google Cloud Console)</span></label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="text" id="redirectUri" name="redirectUri" readonly
+                 style="flex:1;background:#f4f6f8;cursor:text;font-family:monospace;font-size:12px;"
+                 placeholder="Loading...">
+          <button type="button" id="btnCopyRedirect" class="btn btn-outline" style="white-space:nowrap;">Copy</button>
+        </div>
+        <div class="help">In Google Cloud Console → Credentials → your Web app client → Authorised redirect URIs → paste this value.</div>
+      </div>
+
+      <div class="field-group">
+        <label for="spreadsheetId">Google Spreadsheet ID <span class="required">*</span></label>
+        <input type="text" id="spreadsheetId" name="spreadsheetId"
+               placeholder="e.g. 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgVE2upms">
+        <div class="help">
+          Open your Google Sheet. The ID is the long string in the URL between <code>/d/</code> and <code>/edit</code>.
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label for="senderEmail">Gmail Sender Address</label>
+        <input type="email" id="senderEmail" name="senderEmail"
+               placeholder="your@gmail.com">
+        <div class="help">Set automatically after authentication, or enter manually.</div>
+      </div>
+
+      <div class="auth-buttons">
+        <button class="btn btn-primary" id="btnAuthenticate">
+          🔑 Authenticate with Google
+        </button>
+        <button class="btn btn-outline" id="btnSignOut">
+          Sign Out
+        </button>
+      </div>
+
+      <div id="authUser" class="auth-user hidden">
+        <span class="auth-dot"></span>
+        Authenticated as: <strong id="authUserEmail"></strong>
+      </div>
+    </section>
+
+    <!-- ── Search Settings ── -->
+    <section class="card">
+      <h2>🔍 Search Settings</h2>
+
+      <div class="field-group">
+        <label for="searchKeyword">LinkedIn Search Keyword</label>
+        <input type="text" id="searchKeyword" name="searchKeyword"
+               value="UAE job positions Oil and gas onshore or offshore">
+        <div class="help">Posts containing this phrase will be scraped and classified.</div>
+      </div>
+    </section>
+
+    <!-- ── Email Settings ── -->
+    <section class="card">
+      <h2>📧 Email Settings</h2>
+
+      <div class="field-row">
+        <div class="field-group">
+          <label for="followupIntervalDays">Follow-up Interval (days)</label>
+          <input type="number" id="followupIntervalDays" name="followupIntervalDays" value="7" min="1" max="30">
+          <div class="help">Days to wait before sending a follow-up.</div>
+        </div>
+        <div class="field-group">
+          <label for="reportRecipient">Monthly Report Recipient</label>
+          <input type="email" id="reportRecipient" name="reportRecipient"
+                 value="madhu@kushiconsultancy.com">
+        </div>
+      </div>
+
+      <div class="field-group">
+        <label for="reportCC">Monthly Report CC</label>
+        <input type="email" id="reportCC" name="reportCC"
+               value="kushi_head@outlook.com">
+      </div>
+    </section>
+
+    <!-- ── Email Templates ── -->
+    <section class="card">
+      <h2>✏ Email Templates</h2>
+      <div class="tabs">
+        <button class="tab active" data-tab="outreach">Initial Outreach</button>
+        <button class="tab"        data-tab="followup">Follow-Up</button>
+      </div>
+
+      <div id="tab-outreach" class="tab-content">
+        <div class="help" style="margin-bottom: 8px;">
+          Available variables: <code>{authorName}</code>, <code>{postUrl}</code>
+        </div>
+        <textarea id="outreachTemplate" name="outreachTemplate" rows="10"
+                  placeholder="Custom HTML outreach template... (leave blank for default)"></textarea>
+      </div>
+
+      <div id="tab-followup" class="tab-content hidden">
+        <div class="help" style="margin-bottom: 8px;">
+          Available variables: <code>{authorName}</code>, <code>{originalSentDate}</code>, <code>{followupCount}</code>
+        </div>
+        <textarea id="followupTemplate" name="followupTemplate" rows="10"
+                  placeholder="Custom HTML follow-up template... (leave blank for default)"></textarea>
+      </div>
+    </section>
+
+    <!-- ── Actions ── -->
+    <section class="card">
+      <h2>⚙ Actions</h2>
+      <div class="action-grid">
+        <button class="btn btn-secondary" id="btnInitSheets">
+          📋 Initialize Sheets
+        </button>
+        <button class="btn btn-secondary" id="btnTestEmail">
+          📤 Send Test Email
+        </button>
+        <a id="btnOpenSheet" href="#" target="_blank" class="btn btn-outline">
+          🔗 Open Spreadsheet
+        </a>
+      </div>
+    </section>
+
+    <!-- ── Save ── -->
+    <div class="save-row">
+      <button class="btn btn-primary btn-lg" id="btnSave">Save Settings</button>
+    </div>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

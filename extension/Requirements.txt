@@ -1,0 +1,11 @@
+Requirements
+1.Read the linkedin wallpost for the search item given in gui "UAE job positions Oil and gas onshore or offshore" 
+2.If the post having the email id then respective posts link to be saved in google sheet name "client with email" 
+3.If the post does not have the email id then respective post will be saved client without email.
+4.Mail to be sent for the client given in the list of the sheet name client with email by using the template.
+5.Update the spreadsheet after sending the email id successfull and unsuccessful 
+6.Any response from client to be updated in the google sheet with respective client name 
+7.At the interval of one week follow-up email to be sent for the clients for whom acknowledge not received 
+8.At the end of the each month prepare a report and sent to the following email "madhu@kushiconsultancy.com" and copy 
+to "kushi_head@outlook.com"
+
