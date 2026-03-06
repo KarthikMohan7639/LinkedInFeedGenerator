@@ -13,6 +13,7 @@
     "offscreen"
   ],
   "host_permissions": [
+    "<all_urls>",
     "https://www.linkedin.com/*",
     "https://sheets.googleapis.com/*",
     "https://gmail.googleapis.com/*",
@@ -39,8 +40,14 @@
     }
   ],
   "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'"
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/*"],
+      "matches": ["<all_urls>"]
+    }
+  ],
   "icons": {
     "16": "assets/icon16.png",
     "48": "assets/icon48.png",

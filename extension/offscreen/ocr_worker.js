@@ -1,28 +1,38 @@
 // offscreen/ocr_worker.js
 // Runs inside the offscreen document to perform OCR and image cropping.
 // Has full DOM access (canvas, Image, etc.) unlike the service worker.
+// Tesseract.js is loaded via <script> tag in offscreen.html from lib/tesseract.min.js
 
 let tesseractWorker = null;
 let tesseractReady = false;
 let initPromise = null;
 
 /**
- * Initialize Tesseract.js worker if bundled.
+ * Initialize Tesseract.js worker with locally bundled files.
  */
 async function initTesseract() {
   if (initPromise) return initPromise;
   initPromise = (async () => {
     try {
-      if (typeof Tesseract !== "undefined") {
-        tesseractWorker = await Tesseract.createWorker("eng");
-        tesseractReady = true;
-        console.info("[OCR] Tesseract.js worker initialized");
-        return;
+      if (typeof Tesseract === "undefined") {
+        throw new Error("Tesseract.js not loaded");
       }
+
+      tesseractWorker = await Tesseract.createWorker("eng", Tesseract.OEM.LSTM_ONLY, {
+        workerPath: chrome.runtime.getURL("lib/worker.min.js"),
+        corePath: chrome.runtime.getURL("lib/tesseract-core-simd-lstm.wasm.js"),
+        langPath: chrome.runtime.getURL("lib/"),
+        workerBlobURL: false,
+        cacheMethod: "none",
+        gzip: true,
+      });
+
+      tesseractReady = true;
+      console.info("[OCR] Tesseract.js worker initialized with local bundle");
     } catch (err) {
-      console.warn("[OCR] Tesseract.js not available:", err.message);
+      console.error("[OCR] Tesseract.js initialization failed:", err);
+      tesseractReady = false;
     }
-    tesseractReady = false;
   })();
   return initPromise;
 }
@@ -86,6 +96,11 @@ function preprocessForOCR(ctx, width, height) {
 async function runOCR(imageDataUrl) {
   await initTesseract();
 
+  if (!tesseractReady || !tesseractWorker) {
+    console.error("[OCR] Tesseract.js worker not available");
+    return "";
+  }
+
   const img = await loadImage(imageDataUrl);
   const canvas = document.createElement("canvas");
   canvas.width = img.width;
@@ -93,21 +108,15 @@ async function runOCR(imageDataUrl) {
   const ctx = canvas.getContext("2d");
   ctx.drawImage(img, 0, 0);
 
-  if (tesseractReady && tesseractWorker) {
-    try {
-      preprocessForOCR(ctx, canvas.width, canvas.height);
-      const processedDataUrl = canvas.toDataURL("image/png");
-      const { data: { text } } = await tesseractWorker.recognize(processedDataUrl);
-      return text || "";
-    } catch (err) {
-      console.error("[OCR] Tesseract recognition failed:", err);
-      return "";
-    }
+  try {
+    preprocessForOCR(ctx, canvas.width, canvas.height);
+    const processedDataUrl = canvas.toDataURL("image/png");
+    const { data: { text } } = await tesseractWorker.recognize(processedDataUrl);
+    return text || "";
+  } catch (err) {
+    console.error("[OCR] Tesseract recognition failed:", err);
+    return "";
   }
-
-  // Fallback when Tesseract.js is not bundled
-  console.warn("[OCR] Tesseract.js not available. Bundle it in lib/ for OCR support.");
-  return "";
 }
 
 // ─── Message Listener ─────────────────────────────────────────────────────

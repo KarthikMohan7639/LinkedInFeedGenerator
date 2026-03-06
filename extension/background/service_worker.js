@@ -49,13 +49,20 @@ async function ensureOffscreenDocument() {
  * Crop a full-tab screenshot to just the post area using OffscreenCanvas.
  * Since service workers don't have DOM, we send to offscreen doc for cropping.
  */
-async function cropScreenshot(fullScreenshotDataUrl, rect) {
+async function sendToOffscreen(message) {
   await ensureOffscreenDocument();
+  const offscreenClients = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"]
+  });
+  if (!offscreenClients.length) {
+    throw new Error("Offscreen document not available");
+  }
+  // Use sendMessage to the offscreen document (it's the only other extension context
+  // listening). We tag messages with _target so our own onMessage handler can skip them.
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage({
-      type: "CROP_IMAGE",
-      imageDataUrl: fullScreenshotDataUrl,
-      rect
+      ...message,
+      _target: "offscreen"
     }, (response) => {
       if (chrome.runtime.lastError) {
         reject(new Error(chrome.runtime.lastError.message));
@@ -66,23 +73,22 @@ async function cropScreenshot(fullScreenshotDataUrl, rect) {
   });
 }
 
+async function cropScreenshot(fullScreenshotDataUrl, rect) {
+  return sendToOffscreen({
+    type: "CROP_IMAGE",
+    imageDataUrl: fullScreenshotDataUrl,
+    rect
+  });
+}
+
 /**
  * Run OCR on an image via the offscreen document.
  */
 async function runOCRViaOffscreen(imageDataUrl) {
-  await ensureOffscreenDocument();
-  return new Promise((resolve, reject) => {
-    chrome.runtime.sendMessage({
-      type: "RUN_OCR",
-      imageDataUrl
-    }, (response) => {
-      if (chrome.runtime.lastError) {
-        reject(new Error(chrome.runtime.lastError.message));
-      } else {
-        resolve(response || "");
-      }
-    });
-  });
+  return sendToOffscreen({
+    type: "RUN_OCR",
+    imageDataUrl
+  }).then(response => response || "");
 }
 
 // ─── Extension Lifecycle ───────────────────────────────────────────────────
@@ -141,6 +147,9 @@ chrome.alarms.onAlarm.addListener(async (alarm) => {
 // ─── Message Handler ────────────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  // Skip messages targeted at the offscreen document to avoid routing conflicts
+  if (message._target === "offscreen") return false;
+
   logger.debug(MODULE, `Message received: ${message.type}`, { from: sender.id || "popup" });
 
   handleMessage(message, sender)
@@ -207,9 +216,21 @@ async function handleMessage(message, sender) {
           // Extract contacts from OCR text
           const contacts = extractContactsFromText(ocrText);
 
+          // Resolve author name — fallback to profile URL slug if DOM extraction failed
+          let authorName = post.authorName || "Unknown";
+          if (authorName === "Unknown" && post.authorProfile) {
+            try {
+              const profilePath = new URL(post.authorProfile).pathname;
+              const slug = profilePath.split("/").filter(Boolean).pop();
+              if (slug && slug !== "in" && slug !== "company" && slug !== "posts") {
+                authorName = slug.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+              }
+            } catch { /* ignore */ }
+          }
+
           const processedPost = {
             postUrl: post.postUrl,
-            authorName: post.authorName,
+            authorName,
             authorProfile: post.authorProfile,
             postText: contacts.rawText.substring(0, 500),
             emails: contacts.emails,
@@ -224,7 +245,7 @@ async function handleMessage(message, sender) {
           galleryItems.push({
             postIndex: post.postIndex,
             postUrl: post.postUrl,
-            authorName: post.authorName,
+            authorName,
             authorProfile: post.authorProfile,
             imageDataUrl: post.imageDataUrl,
             emails: contacts.emails,

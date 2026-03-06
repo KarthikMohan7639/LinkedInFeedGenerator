@@ -271,13 +271,22 @@ btnScrape.addEventListener("click", async () => {
   try {
     const result = await sendMessage("TRIGGER_SCRAPE", { keyword });
     setStatus("done", "Capture started on LinkedIn tab");
-    showBanner("success", `✓ Screenshot capture started! Check LinkedIn tab. ${result?.message || ""}`);
+    showBanner("success", `✓ Screenshot capture started! Check LinkedIn tab.`);
 
-    // Poll for gallery updates
-    setTimeout(async () => {
-      await loadGallery();
-      await loadStats();
-    }, 8000);
+    // Poll for gallery updates every 5 seconds for up to 90 seconds
+    let pollCount = 0;
+    const maxPolls = 18;
+    const pollInterval = setInterval(async () => {
+      pollCount++;
+      try {
+        await loadGallery();
+        await loadStats();
+      } catch { /* ignore */ }
+      if (pollCount >= maxPolls) {
+        clearInterval(pollInterval);
+        setStatus("idle", "Idle");
+      }
+    }, 5000);
   } catch (err) {
     setStatus("error", "Capture failed");
     showBanner("error", `✗ ${err.message}`);

@@ -142,20 +142,63 @@
   }
 
   function extractAuthorName(element) {
+    // Stage 1: Known LinkedIn class selectors
     const selectors = [
-      ".update-components-actor__name",
       ".update-components-actor__name span[aria-hidden='true']",
+      ".update-components-actor__name",
+      ".update-components-actor__title span[aria-hidden='true']",
       ".entity-result__title-text a span[aria-hidden='true']",
+      ".entity-result__title-text a",
       ".entity-result__title-text",
+      ".feed-shared-actor__name span[aria-hidden='true']",
       ".feed-shared-actor__name",
       ".feed-shared-actor__title span[aria-hidden='true']",
       "[data-anonymize='person-name']",
-      ".actor-name"
+      ".actor-name",
+      ".app-aware-link span[aria-hidden='true']"
     ];
     for (const sel of selectors) {
       const el = element.querySelector(sel);
-      if (el && el.innerText?.trim()) return el.innerText.trim().split("\n")[0].trim();
+      const text = el?.innerText?.trim();
+      if (text && text.length > 1 && text.length < 80) return text.split("\n")[0].trim();
     }
+
+    // Stage 2: First link pointing to a profile (/in/) or company (/company/)
+    const profileLink = element.querySelector("a[href*='/in/']") ||
+                        element.querySelector("a[href*='/company/']");
+    if (profileLink) {
+      // Try the link's visible text first
+      const linkText = profileLink.innerText?.trim();
+      if (linkText && linkText.length > 1 && linkText.length < 80) {
+        return linkText.split("\n")[0].trim();
+      }
+      // Extract name/company from the URL path
+      try {
+        const path = new URL(profileLink.href).pathname;
+        const slug = path.split("/").filter(Boolean).pop();
+        if (slug && slug !== "in" && slug !== "company") {
+          return slug.replace(/-/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+        }
+      } catch { /* ignore */ }
+    }
+
+    // Stage 3: aria-label attributes on links (LinkedIn often puts name here)
+    const ariaLinks = element.querySelectorAll("a[aria-label]");
+    for (const a of ariaLinks) {
+      const label = a.getAttribute("aria-label")?.trim();
+      if (label && label.length > 2 && label.length < 80 &&
+          !label.toLowerCase().includes("like") &&
+          !label.toLowerCase().includes("comment") &&
+          !label.toLowerCase().includes("share") &&
+          !label.toLowerCase().includes("reaction")) {
+        // Extract name portion — often "View {Name}'s profile"
+        const viewMatch = label.match(/(?:View|Go to)\s+(.+?)(?:'s|'s|\s+profile|\s+page)/i);
+        if (viewMatch) return viewMatch[1].trim();
+        // Use full label if short enough and looks like a name
+        if (label.length < 50) return label.split("\n")[0].trim();
+      }
+    }
+
     return "Unknown";
   }
 
@@ -227,8 +270,8 @@
       }, (response) => {
         if (chrome.runtime.lastError) {
           reject(new Error(chrome.runtime.lastError.message));
-        } else if (response?.success) {
-          resolve(response.imageDataUrl);
+        } else if (response?.success && response.data?.imageDataUrl) {
+          resolve(response.data.imageDataUrl);
         } else {
           reject(new Error(response?.error || "Screenshot capture failed"));
         }
@@ -294,17 +337,20 @@
       console.info(`[LinkedIn Scraper] Total captured: ${capturedPosts.length}`);
 
       // Send all captured posts to service worker for OCR processing
+      // Don't wait for the full OCR response — it can take 30+ seconds.
+      // The gallery is updated asynchronously by the service worker.
       chrome.runtime.sendMessage({
         type: "POSTS_CAPTURED",
         payload: capturedPosts
-      }, (response) => {
+      }, () => {
         if (chrome.runtime.lastError) {
           console.error("[LinkedIn Scraper] Message error:", chrome.runtime.lastError.message);
         } else {
-          console.info("[LinkedIn Scraper] Service worker response:", response);
+          console.info("[LinkedIn Scraper] Posts sent to service worker for OCR processing");
         }
-        isRunning = false;
       });
+
+      isRunning = false;
 
     } catch (err) {
       console.error("[LinkedIn Scraper] Fatal error:", err);
